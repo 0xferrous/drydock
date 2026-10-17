@@ -305,6 +305,7 @@ func (e *Engine) Up(ctx context.Context, req Request, sink Sink) error {
 	if _, running := e.pid(m.Name); !running {
 		return fmt.Errorf("the VM did not start; see %s", console)
 	}
+	_ = sink.Emit(Event{Type: "stdout", Data: "waiting for the guest to accept SSH"})
 	if err := e.waitSSH(ctx, r, m, key); err != nil {
 		return err
 	}
