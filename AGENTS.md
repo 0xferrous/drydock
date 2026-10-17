@@ -59,6 +59,14 @@ interface in `internal/drydock/types.go`.
 See `docs/testing.md`. The rule is: **the host runs only vetted code;
 agent-authored code runs in a VM.**
 
+Before handing a build to the user, run the end-to-end check (needs KVM, takes
+a few minutes). It covers fresh boot, re-`up` while healthy, screenshot, live
+`apply`, recovery from a broken guest, `down`, and `--dry-run`:
+
+```sh
+just e2e
+```
+
 Tier 0 (no KVM):
 
 ```sh
