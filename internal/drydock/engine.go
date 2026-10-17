@@ -245,9 +245,23 @@ func (e *Engine) Up(ctx context.Context, req Request, sink Sink) error {
 	if err != nil {
 		return err
 	}
-	if _, running := e.pid(r.req.Name); running {
-		_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("VM '%s' is already running", r.req.Name)})
-		return e.emitStatus(sink, r)
+	if !req.DryRun {
+		if _, running := e.pid(r.req.Name); running {
+			existing, loadErr := e.loadMeta(r.req.Name)
+			if loadErr == nil && e.probeSSH(ctx, existing, key, 15*time.Second) {
+				_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("VM '%s' is already running", r.req.Name)})
+				if !existing.Headless {
+					if err := e.startDisplay(existing); err != nil {
+						_ = sink.Emit(Event{Type: "stderr", Data: "warning: " + err.Error()})
+					}
+				}
+				return e.emitStatus(sink, r)
+			}
+			_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("VM '%s' is running but unreachable; restarting", r.req.Name)})
+			if err := e.Down(ctx, r.req, sink); err != nil {
+				return err
+			}
+		}
 	}
 	if req.Fresh {
 		_ = os.Remove(filepath.Join(r.vmDir, "disk.qcow2"))
@@ -584,6 +598,23 @@ func (e *Engine) waitSSH(ctx context.Context, r resolved, m *meta, key string) e
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timed out waiting for SSH; see %s", filepath.Join(r.vmDir, "console.log"))
+}
+
+// probeSSH reports whether the running guest accepts our key within timeout.
+// It is used to decide if an "already running" VM is actually usable.
+func (e *Engine) probeSSH(ctx context.Context, m *meta, key string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if streamExec(ctx, nopSink{}, e.sshCommand(ctx, m, key, true, "true")) == nil {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(time.Second):
+		}
+	}
+	return false
 }
 
 type nopSink struct{}
