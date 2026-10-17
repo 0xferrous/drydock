@@ -48,8 +48,15 @@ interface in `internal/drydock/types.go`.
 - Add operations to `Driver` once; the engine, the portal, and the remote driver
   all follow from it. Do not introduce a second, argv-shaped protocol.
 - Never assume a single flake directory or a fixed input set. Build through the
-  generated wrapper flake so `--override-input`, `--nix-arg`, and arbitrary
-  config layouts work. Overrides must be persisted in the VM metadata.
+  generated wrapper flake so `--override-input` and arbitrary config layouts
+  work. Overrides must be persisted in the VM metadata.
+- Keep the host build **pure and sandboxed**. Do not reintroduce `--impure`,
+  `builtins.getEnv`, or absolute `builtins.readFile` in the guest module; pass
+  values as options through the wrapper flake instead. Force
+  `--option sandbox true` on every build.
+- Treat every client-provided string as untrusted: validate VM names, override
+  input names, and display addresses before using them in paths, unit names, or
+  argv. Do not let clients pass `--nix-arg` through the portal by default.
 - The portal only ever calls the local `Driver`. Never add a generic shell or
   arbitrary-command endpoint.
 - Keep the Go code `gofmt`-clean.

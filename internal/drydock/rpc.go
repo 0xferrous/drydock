@@ -21,9 +21,10 @@ func (f sinkFunc) Emit(e Event) error { return f(e) }
 // Server serves a Driver over HTTP as NDJSON streams, JSON unary results, and
 // PNG screenshots.
 type Server struct {
-	Driver  Driver
-	Token   string
-	PathMap [][2]string
+	Driver       Driver
+	Token        string
+	PathMap      [][2]string
+	AllowNixArgs bool
 }
 
 // Handler returns the portal's HTTP handler.
@@ -189,6 +190,9 @@ func (s *Server) decodeRequest(r *http.Request) (Request, error) {
 		return req, err
 	}
 	s.prepare(&req)
+	if !s.AllowNixArgs && len(req.NixArgs) > 0 {
+		return req, fmt.Errorf("this portal does not allow --nix-arg")
+	}
 	return req, nil
 }
 

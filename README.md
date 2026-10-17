@@ -150,6 +150,31 @@ Install it by copying or symlinking the skill into your agent's skill directory.
 - `--persist` is required to make a switch survive a reboot; the default
   `test` action is intentionally ephemeral.
 
+## Running with an untrusted agent
+
+The host portal is built to be safe when the agent on the other end is not
+trusted:
+
+- **Pure evaluation.** The host build runs without `--impure`, and guest
+  parameters are passed as module options rather than `builtins.getEnv`. A
+  client-controlled config therefore cannot call `getEnv` or `readFile` on
+  arbitrary host paths.
+- **Forced Nix sandbox.** Every build passes `--option sandbox true`, ignoring
+  any client attempt to weaken it.
+- **No `--nix-arg` from clients.** The portal rejects it by default; only a
+  local, trusted `drydock` (or an explicitly enabled portal) may pass extra
+  `nix build` flags.
+- **Validated input.** VM names, `--override-input` names, and display
+  addresses are validated before they reach paths, unit names, or argv.
+- **Sandboxed service.** Run through `nixosModules.drydock-portal`, the portal
+  has `ProtectSystem=strict`, `ProtectHome=read-only`, `NoNewPrivileges`, and a
+  single writable `StateDirectory` (`/var/lib/drydock`). QEMU runs as that same
+  user, so host directories exposed through guest shares cannot be written.
+
+Residual risk: the config is still built (inside the Nix sandbox) and executed
+inside the guest, and the Nix daemon and kernel are trusted. A config that is
+built is still an attack surface; the sandbox is what bounds it.
+
 ## Limitations
 
 - Kernel, initrd, and bootloader changes are not live-switched. `apply` updates

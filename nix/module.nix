@@ -15,20 +15,30 @@ let
   cfg = config.services.drydock-portal;
   defaultPackage = pkgs.callPackage ./portal.nix { };
 
-  # Conservative sandboxing that does not interfere with nix builds or QEMU.
-  # This is defense in depth: the portal still runs `nix build` and QEMU, so it
-  # is not a trust boundary. Tighter confinement (ProtectSystem = "strict",
-  # ProtectHome, RestrictAddressFamilies) is left to `extraServiceConfig` and
-  # `readWritePaths` because it needs per-host tuning.
+  # Where the portal keeps VM state. systemd creates and owns this when it is
+  # the default, keeping it writable even under ProtectSystem = "strict".
+  stateDir = if cfg.stateRoot != null then cfg.stateRoot else "/var/lib/drydock";
+
+  # The portal runs `nix build` and QEMU on the host, so it is sandboxed by
+  # default. It can read the config (in the home) but not write it, and can
+  # only write its own state directory. QEMU runs as this user, so the sandbox
+  # also bounds what a malicious config can reach through the guest.
   hardeningDefault = {
     NoNewPrivileges = true;
     PrivateTmp = true;
-    ProtectSystem = "full";
+    ProtectSystem = "strict";
+    ProtectHome = "read-only";
     ProtectKernelTunables = true;
     ProtectKernelModules = true;
     ProtectKernelLogs = true;
     ProtectClock = true;
     ProtectHostname = true;
+    RestrictAddressFamilies = [
+      "AF_UNIX"
+      "AF_INET"
+      "AF_INET6"
+      "AF_NETLINK"
+    ];
     RestrictSUIDSGID = true;
     RestrictRealtime = true;
     SystemCallArchitectures = "native";
@@ -146,8 +156,9 @@ in
       example = "/var/lib/drydock";
       description = ''
         Directory for drydock's per-VM state (disk images, metadata, keys).
-        Sets `DRYDOCK_STATE`. When unset, drydock uses
-        `$XDG_STATE_HOME/drydock` (or `~/.local/state/drydock`).
+        Sets `DRYDOCK_STATE`. Defaults to `/var/lib/drydock`, which systemd
+        creates and keeps writable under the sandbox. Point it elsewhere only
+        if that directory already exists and is writable by the service user.
       '';
     };
 
@@ -155,9 +166,21 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Apply conservative systemd sandboxing to the portal. This is defense in
-        depth only; the portal can still build flakes and run QEMU. Set to
-        `false` if a hardened directive interferes with your setup.
+        Sandbox the portal with systemd. With this on the portal can read the
+        config but not write the home, and can only write its state directory.
+        QEMU runs as the same user, so this also bounds what a malicious config
+        can reach through the guest. Set to `false` only if a directive
+        interferes with your setup.
+      '';
+    };
+
+    allowNixArgs = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Allow clients to pass `--nix-arg` through to `nix build`. This is
+        unsafe against an untrusted agent: it can disable the Nix sandbox or
+        change build settings. Leave disabled unless the agent is trusted.
       '';
     };
 
@@ -165,9 +188,8 @@ in
       type = lib.types.listOf lib.types.str;
       default = [ ];
       description = ''
-        Extra paths the portal may write to when `hardening = true`. Use this
-        together with `extraServiceConfig.ProtectSystem = "strict"` to tighten
-        the sandbox.
+        Extra paths the portal may write to when `hardening = true`, in
+        addition to `stateRoot`.
       '';
     };
 
@@ -221,6 +243,7 @@ in
               "${name}=${ref}"
             ]) cfg.defaultOverrideInputs
           )
+          ++ lib.optionals cfg.allowNixArgs [ "--allow-nix-arg" ]
           ++ cfg.extraArgs
         );
         User = cfg.user;
@@ -228,14 +251,19 @@ in
         RestartSec = 3;
         # QEMU needs /dev/kvm when the portal does not run as root.
         SupplementaryGroups = [ "kvm" ];
-      }
-      // lib.optionalAttrs (cfg.stateRoot != null) {
-        Environment = [ "DRYDOCK_STATE=${cfg.stateRoot}" ];
+        # Keep VM state and the Nix eval cache inside the writable state dir.
+        Environment = [
+          "DRYDOCK_STATE=${stateDir}"
+          "XDG_CACHE_HOME=${stateDir}/cache"
+        ];
       }
       // lib.optionalAttrs cfg.hardening (
         hardeningDefault
-        // lib.optionalAttrs (cfg.readWritePaths != [ ]) {
-          ReadWritePaths = cfg.readWritePaths;
+        // lib.optionalAttrs (cfg.stateRoot == null) {
+          StateDirectory = "drydock";
+        }
+        // {
+          ReadWritePaths = [ stateDir ] ++ cfg.readWritePaths;
         }
       )
       // cfg.extraServiceConfig;

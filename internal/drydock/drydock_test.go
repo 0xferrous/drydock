@@ -169,10 +169,39 @@ func TestSSHCommandIgnoresUserConfig(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsBadInput(t *testing.T) {
+	engine := &Engine{StateRoot: t.TempDir(), DefaultFlake: "path:/x", DefaultHost: "h"}
+	if _, err := engine.resolve(Request{Name: "../../etc"}); err == nil {
+		t.Error("path-traversal name accepted")
+	}
+	if _, err := engine.resolve(Request{Name: "ok", Overrides: []InputOverride{{Name: "../x", Ref: "path:/x"}}}); err == nil {
+		t.Error("bad override name accepted")
+	}
+	if _, err := engine.resolve(Request{Name: "ok", DisplayAddr: "1.2.3.4;rm -rf"}); err == nil {
+		t.Error("bad display address accepted")
+	}
+	if _, err := engine.resolve(Request{Name: "ok", Host: "h"}); err != nil {
+		t.Errorf("valid request rejected: %v", err)
+	}
+}
+
 func TestWriteWrapper(t *testing.T) {
 	dir := t.TempDir()
-	engine := &Engine{NixDir: "/nix/store/aaa-source/nix"}
-	if err := engine.writeWrapper(dir, Request{Flake: "path:/x", Host: "demo"}); err != nil {
+	nixDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(nixDir, "guest"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nixDir, "guest", "default.nix"), []byte("{ ... }: { }"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{StateRoot: t.TempDir(), NixDir: nixDir}
+	if err := os.MkdirAll(engine.vmDir("vm"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(engine.keyPath("vm")+".pub", []byte("ssh-ed25519 AAAA test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.writeWrapper(dir, Request{Name: "vm", Flake: "path:/x", Host: "demo"}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -182,10 +211,17 @@ func TestWriteWrapper(t *testing.T) {
 	for _, want := range []string{
 		`inputs.config.url = "path:/x";`,
 		`builtins.getAttr "demo"`,
-		"/nix/store/aaa-source/nix/guest",
+		"./guest",
+		"builtins.readFile ./id_ed25519.pub",
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("wrapper missing %q:\n%s", want, data)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "id_ed25519.pub")); err != nil {
+		t.Errorf("wrapper pubkey missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "guest", "default.nix")); err != nil {
+		t.Errorf("wrapper guest module missing: %v", err)
 	}
 }

@@ -64,6 +64,7 @@ func main() {
 	tokenFile := flag.String("token-file", "", "file containing a bearer token to require")
 	defaultFlake := flag.String("default-flake", "", "flake used when the client omits one")
 	defaultHost := flag.String("default-host", "", "nixosConfiguration used when omitted")
+	allowNixArgs := flag.Bool("allow-nix-arg", false, "allow clients to pass --nix-arg to nix build (unsafe)")
 	cwd := flag.String("cwd", "", "working directory for drydock invocations")
 	var maps mapList
 	flag.Var(&maps, "map", "rewrite guest-visible path prefixes to host paths (FROM=TO)")
@@ -91,9 +92,10 @@ func main() {
 	engine.DefaultOverrides = overrides
 
 	server := &drydock.Server{
-		Driver:  engine,
-		Token:   token,
-		PathMap: maps,
+		Driver:       engine,
+		Token:        token,
+		PathMap:      maps,
+		AllowNixArgs: *allowNixArgs,
 	}
 	addr := net.JoinHostPort(*bind, strconv.Itoa(*port))
 	httpServer := &http.Server{

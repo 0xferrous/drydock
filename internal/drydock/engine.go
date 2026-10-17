@@ -11,10 +11,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+)
+
+// Names and addresses come from an untrusted client, so they are strictly
+// validated before being used in paths, systemd unit names, or arguments.
+var (
+	nameRE      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	inputNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
+	hostRE      = regexp.MustCompile(`^[A-Za-z0-9\[\]][A-Za-z0-9.:_\[\]-]*$`)
 )
 
 // Engine holds the paths an instance needs. Zero value is not usable; use
@@ -54,6 +63,9 @@ type resolved struct {
 func (e *Engine) resolve(req Request) (resolved, error) {
 	if req.Name == "" {
 		req.Name = envOr("DRYDOCK_NAME", "default")
+	}
+	if !nameRE.MatchString(req.Name) {
+		return resolved{}, fmt.Errorf("invalid VM name %q", req.Name)
 	}
 	saved, _ := e.loadMeta(req.Name)
 	if saved == nil {
@@ -101,6 +113,14 @@ func (e *Engine) resolve(req Request) (resolved, error) {
 	}
 	if req.DisplayAddr == "" {
 		req.DisplayAddr = envOr("DRYDOCK_DISPLAY_ADDRESS", "127.0.0.1")
+	}
+	if !hostRE.MatchString(req.DisplayAddr) {
+		return resolved{}, fmt.Errorf("invalid display address %q", req.DisplayAddr)
+	}
+	for _, override := range req.Overrides {
+		if !inputNameRE.MatchString(override.Name) {
+			return resolved{}, fmt.Errorf("invalid override input name %q", override.Name)
+		}
 	}
 	return resolved{req: req, vmDir: e.vmDir(req.Name)}, nil
 }
@@ -171,15 +191,17 @@ func freePort(start int) (int, error) {
 
 // buildAttr builds one of the wrapper flake's outputs. The wrapper loads the
 // user's flake as an input and extends their nixosConfiguration with the guest
-// module, so `nix build --flake` (and therefore --override-input and arbitrary
-// nix flags) works and the user's config can live in any layout.
+// module, so `nix build` (with input overrides) does the work. Evaluation is
+// pure and the Nix sandbox is forced on, so a client-controlled config cannot
+// read host files or weaken the build sandbox.
 func (e *Engine) buildAttr(ctx context.Context, req Request, attr, link string, sink Sink) (string, error) {
 	evalDir := filepath.Join(e.vmDir(req.Name), "eval")
 	if err := e.writeWrapper(evalDir, req); err != nil {
 		return "", err
 	}
 	args := []string{
-		"build", "--impure", "--no-write-lock-file",
+		"build", "--no-write-lock-file",
+		"--option", "sandbox", "true",
 		"-o", link,
 		"path:" + evalDir + "#drydock." + attr,
 		"--override-input", "config", req.Flake,
@@ -191,33 +213,50 @@ func (e *Engine) buildAttr(ctx context.Context, req Request, attr, link string, 
 
 	_ = os.MkdirAll(filepath.Dir(link), 0o755)
 	cmd := exec.CommandContext(ctx, "nix", args...)
-	cmd.Env = append(os.Environ(),
-		"DRYDOCK_SSH_PUBKEY_FILE="+e.keyPath(req.Name)+".pub",
-		"DRYDOCK_MEM="+req.Mem,
-		"DRYDOCK_CPUS="+req.CPUs,
-		"DRYDOCK_DISK="+req.Disk,
-	)
 	if err := streamExec(ctx, sink, cmd); err != nil {
 		return "", err
 	}
 	return filepath.EvalSymlinks(link)
 }
 
-// writeWrapper generates the tiny flake that pins the user's config as an input
-// and exposes the VM and system derivations with the guest module applied.
+// writeWrapper generates the per-VM flake that pins the user's config as an
+// input and exposes the VM and system derivations with the guest module
+// applied. Guest parameters are passed as options, never via the environment.
 func (e *Engine) writeWrapper(dir string, req Request) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Join(dir, "flake.lock"))
-	guest := filepath.Join(e.NixDir, "guest")
+	pubkey, err := os.ReadFile(e.keyPath(req.Name) + ".pub")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "id_ed25519.pub"), pubkey, 0o644); err != nil {
+		return err
+	}
+	// The guest module must live inside the flake: pure evaluation forbids
+	// referencing absolute store paths from the wrapper.
+	if err := copyTree(filepath.Join(e.NixDir, "guest"), filepath.Join(dir, "guest")); err != nil {
+		return err
+	}
 	contents := fmt.Sprintf(`{
   inputs.config.url = %s;
 
   outputs = { self, config, ... }:
     let
-      preview = (builtins.getAttr %s config.nixosConfigurations).extendModules {
-        modules = [ %s ];
+      base = builtins.getAttr %s config.nixosConfigurations;
+      preview = base.extendModules {
+        modules = [
+          ./guest
+          {
+            drydock = {
+              sshPubkey = builtins.readFile ./id_ed25519.pub;
+              mem = %s;
+              cpus = %s;
+              disk = %s;
+            };
+          }
+        ];
       };
     in {
       drydock = {
@@ -226,8 +265,48 @@ func (e *Engine) writeWrapper(dir string, req Request) error {
       };
     };
 }
-`, nixQuote(req.Flake), nixQuote(req.Host), guest)
+`, nixQuote(req.Flake), nixQuote(req.Host), nixInt(req.Mem), nixInt(req.CPUs), nixInt(req.Disk))
 	return os.WriteFile(filepath.Join(dir, "flake.nix"), []byte(contents), 0o644)
+}
+
+// copyTree copies a small directory tree (the guest module) into the wrapper
+// flake. It is not meant for large or symlinked trees.
+func copyTree(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		from := filepath.Join(src, entry.Name())
+		to := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyTree(from, to); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(from)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(to, data, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func nixInt(value string) string {
+	if value == "" {
+		return "null"
+	}
+	if n, err := strconv.Atoi(value); err == nil {
+		return strconv.Itoa(n)
+	}
+	return "null"
 }
 
 func nixQuote(value string) string {

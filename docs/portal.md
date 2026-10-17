@@ -127,5 +127,13 @@ prescribe a sharing mechanism.
 
 - Bind the portal to the private host/guest link, never a public interface.
 - Set `tokenFile` when more than one guest shares the bridge.
-- The portal inherits the privileges of `services.drydock-portal.user`; it can
-  build configs and run QEMU, so treat it like the `drydock` CLI itself.
+- The portal runs nix builds and QEMU as its service user. Run it through the
+  NixOS module so it gets the systemd sandbox (`ProtectSystem=strict`,
+  `ProtectHome=read-only`, `NoNewPrivileges`, state only in `/var/lib/drydock`).
+  The manual `nix run` form is convenient but unsandboxed.
+- Host builds are pure and forced into the Nix sandbox, and the portal rejects
+  client `--nix-arg` unless `allowNixArgs = true`. Leave it off for untrusted
+  agents: `--nix-arg` can disable the build sandbox.
+- A config that is built is still code running in the build sandbox, and the
+  resulting guest runs it. drydock bounds where that code can reach; it does not
+  make arbitrary configs trustworthy.
