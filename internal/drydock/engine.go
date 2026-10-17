@@ -293,8 +293,12 @@ func (e *Engine) Up(ctx context.Context, req Request, sink Sink) error {
 	_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf(
 		"booting VM '%s' (ssh :%d, vnc :%d)", m.Name, m.SSHPort, m.VNCPort)})
 
+	diskImage := filepath.Join(r.vmDir, "disk.qcow2")
+	if _, err := os.Stat(diskImage); os.IsNotExist(err) {
+		_ = sink.Emit(Event{Type: "stdout", Data: "creating the guest disk (first boot; this can take a moment)"})
+	}
 	env := append(os.Environ(),
-		"NIX_DISK_IMAGE="+filepath.Join(r.vmDir, "disk.qcow2"),
+		"NIX_DISK_IMAGE="+diskImage,
 		"QEMU_OPTS="+qemuOpts,
 		"QEMU_NET_OPTS="+fmt.Sprintf("hostfwd=tcp:127.0.0.1:%d-:22", m.SSHPort),
 	)
