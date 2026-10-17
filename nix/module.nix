@@ -78,6 +78,19 @@ in
       description = "nixosConfiguration to preview when a client does not pass `--host`.";
     };
 
+    defaultOverrideInputs = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = {
+        my-nix = "/home/me/dev/fr/my-nix";
+      };
+      description = ''
+        Input overrides applied when a client does not pass `--override-input`.
+        Use host paths. A per-VM override saved by `drydock up` takes
+        precedence over these defaults.
+      '';
+    };
+
     pathMap = lib.mkOption {
       type = lib.types.attrsOf lib.types.str;
       default = { };
@@ -201,6 +214,12 @@ in
               "--map"
               "${from}=${to}"
             ]) cfg.pathMap
+          )
+          ++ lib.concatLists (
+            lib.mapAttrsToList (name: ref: [
+              "--default-override-input"
+              "${name}=${ref}"
+            ]) cfg.defaultOverrideInputs
           )
           ++ cfg.extraArgs
         );

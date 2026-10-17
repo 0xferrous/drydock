@@ -22,6 +22,12 @@ import (
 type Engine struct {
 	StateRoot string
 	NixDir    string
+
+	// Defaults supplied by a host portal. Resolution order for every field is
+	// explicit request > saved VM metadata > these defaults > environment.
+	DefaultFlake     string
+	DefaultHost      string
+	DefaultOverrides []InputOverride
 }
 
 // NewEngine builds an Engine from the environment.
@@ -56,8 +62,14 @@ func (e *Engine) resolve(req Request) (resolved, error) {
 	if req.Flake == "" {
 		req.Flake = saved.Flake
 	}
+	if req.Flake == "" {
+		req.Flake = e.DefaultFlake
+	}
 	if req.Host == "" {
 		req.Host = saved.Host
+	}
+	if req.Host == "" {
+		req.Host = e.DefaultHost
 	}
 	if req.DisplayAddr == "" {
 		req.DisplayAddr = saved.DisplayAddr
@@ -65,7 +77,11 @@ func (e *Engine) resolve(req Request) (resolved, error) {
 	if req.ClearOverrides {
 		req.Overrides = nil
 	} else if len(req.Overrides) == 0 {
-		req.Overrides = saved.Overrides
+		if len(saved.Overrides) > 0 {
+			req.Overrides = saved.Overrides
+		} else {
+			req.Overrides = e.DefaultOverrides
+		}
 	}
 	if len(req.NixArgs) == 0 {
 		req.NixArgs = saved.NixArgs

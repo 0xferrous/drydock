@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -37,6 +38,26 @@ func (m *mapList) Set(value string) error {
 	return nil
 }
 
+// overrideList collects repeatable --default-override-input NAME=REF flags.
+type overrideList []drydock.InputOverride
+
+func (o *overrideList) String() string {
+	parts := make([]string, 0, len(*o))
+	for _, override := range *o {
+		parts = append(parts, override.Name+"="+override.Ref)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (o *overrideList) Set(value string) error {
+	name, ref, ok := strings.Cut(value, "=")
+	if !ok || name == "" {
+		return fmt.Errorf("expected NAME=REF, got %q", value)
+	}
+	*o = append(*o, drydock.InputOverride{Name: name, Ref: ref})
+	return nil
+}
+
 func main() {
 	bind := flag.String("bind", "127.0.0.1", "address to listen on")
 	port := flag.Int("port", 8787, "port to listen on")
@@ -46,6 +67,8 @@ func main() {
 	cwd := flag.String("cwd", "", "working directory for drydock invocations")
 	var maps mapList
 	flag.Var(&maps, "map", "rewrite guest-visible path prefixes to host paths (FROM=TO)")
+	var overrides overrideList
+	flag.Var(&overrides, "default-override-input", "default input override NAME=REF (repeatable)")
 	flag.Parse()
 
 	token := ""
@@ -62,12 +85,15 @@ func main() {
 		}
 	}
 
+	engine := drydock.NewEngine()
+	engine.DefaultFlake = *defaultFlake
+	engine.DefaultHost = *defaultHost
+	engine.DefaultOverrides = overrides
+
 	server := &drydock.Server{
-		Driver:       drydock.NewEngine(),
-		Token:        token,
-		DefaultFlake: *defaultFlake,
-		DefaultHost:  *defaultHost,
-		PathMap:      maps,
+		Driver:  engine,
+		Token:   token,
+		PathMap: maps,
 	}
 	addr := net.JoinHostPort(*bind, strconv.Itoa(*port))
 	httpServer := &http.Server{

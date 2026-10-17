@@ -98,6 +98,62 @@ func TestDecodePPM(t *testing.T) {
 	}
 }
 
+func TestResolvePrecedence(t *testing.T) {
+	engine := &Engine{
+		StateRoot:    t.TempDir(),
+		DefaultFlake: "path:/default",
+		DefaultHost:  "default-host",
+		DefaultOverrides: []InputOverride{
+			{Name: "marker", Ref: "path:/default-marker"},
+		},
+	}
+
+	// No saved metadata: portal defaults apply.
+	got, err := engine.resolve(Request{Name: "vm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.req.Flake != "path:/default" || got.req.Host != "default-host" {
+		t.Errorf("defaults not applied: %#v", got.req)
+	}
+	if len(got.req.Overrides) != 1 || got.req.Overrides[0].Ref != "path:/default-marker" {
+		t.Errorf("default overrides not applied: %#v", got.req.Overrides)
+	}
+
+	// Saved VM metadata wins over portal defaults.
+	if err := engine.saveMeta(&meta{
+		Name: "vm", Flake: "path:/saved", Host: "saved-host",
+		Overrides: []InputOverride{{Name: "marker", Ref: "path:/saved-marker"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = engine.resolve(Request{Name: "vm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.req.Flake != "path:/saved" || got.req.Host != "saved-host" {
+		t.Errorf("saved state did not win: %#v", got.req)
+	}
+	if len(got.req.Overrides) != 1 || got.req.Overrides[0].Ref != "path:/saved-marker" {
+		t.Errorf("saved overrides did not win: %#v", got.req.Overrides)
+	}
+
+	// Explicit request wins over everything.
+	got, err = engine.resolve(Request{
+		Name: "vm", Flake: "path:/explicit", Host: "explicit-host",
+		Overrides: []InputOverride{{Name: "marker", Ref: "path:/explicit-marker"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.req.Flake != "path:/explicit" || got.req.Host != "explicit-host" {
+		t.Errorf("explicit request did not win: %#v", got.req)
+	}
+	if len(got.req.Overrides) != 1 || got.req.Overrides[0].Ref != "path:/explicit-marker" {
+		t.Errorf("explicit overrides did not win: %#v", got.req.Overrides)
+	}
+}
+
 func TestWriteWrapper(t *testing.T) {
 	dir := t.TempDir()
 	engine := &Engine{NixDir: "/nix/store/aaa-source/nix"}

@@ -21,11 +21,9 @@ func (f sinkFunc) Emit(e Event) error { return f(e) }
 // Server serves a Driver over HTTP as NDJSON streams, JSON unary results, and
 // PNG screenshots.
 type Server struct {
-	Driver       Driver
-	Token        string
-	DefaultFlake string
-	DefaultHost  string
-	PathMap      [][2]string
+	Driver  Driver
+	Token   string
+	PathMap [][2]string
 }
 
 // Handler returns the portal's HTTP handler.
@@ -176,14 +174,9 @@ func decodeRequest(r *http.Request) (Request, error) {
 	return req, nil
 }
 
-// prepare fills portal defaults and rewrites guest-visible paths.
+// prepare rewrites guest-visible paths. Defaults live on the Engine so that
+// saved per-VM state wins over them.
 func (s *Server) prepare(req *Request) {
-	if req.Flake == "" {
-		req.Flake = s.DefaultFlake
-	}
-	if req.Host == "" {
-		req.Host = s.DefaultHost
-	}
 	req.Flake = applyPathMap(req.Flake, s.PathMap)
 	for i := range req.Overrides {
 		req.Overrides[i].Ref = applyPathMap(req.Overrides[i].Ref, s.PathMap)
