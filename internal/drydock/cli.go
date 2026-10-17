@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 )
 
 // Version is the drydock release string.
@@ -28,6 +29,8 @@ Commands:
   apply         Rebuild the current config and live-switch the running VM
   reset         Destroy the VM disk and boot it fresh
   down          Stop the VM and its display
+  rm            Stop and delete a VM's state
+  prune         Delete every stopped VM's state
   status        Show VM state, ports and URLs
   url           Print the browser (noVNC) URL
   screenshot    Capture the guest display to a PNG
@@ -56,6 +59,7 @@ Flags:
       --clear-overrides    Ignore overrides saved for this VM
       --persist            Apply with switch-to-configuration "switch"
   -j, --json               Machine-readable status output
+      --running            Only list running VMs
   -h, --help               Show this help
 `
 
@@ -103,6 +107,7 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&req.Persist, "persist", false, "persist the switch")
 	fs.BoolVar(&req.JSON, "json", false, "machine-readable status")
 	fs.BoolVar(&req.JSON, "j", false, "machine-readable status")
+	fs.BoolVar(&req.RunningOnly, "running", false, "only list running VMs")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -129,6 +134,10 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		err = driver.Reset(ctx, req, sink)
 	case "down":
 		err = driver.Down(ctx, req, sink)
+	case "rm", "remove":
+		err = driver.Remove(ctx, req, sink)
+	case "prune":
+		err = driver.Prune(ctx, req, sink)
 	case "status":
 		err = runStatus(ctx, driver, req, stdout)
 	case "url":
@@ -236,31 +245,93 @@ func runList(ctx context.Context, driver Driver, req Request, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
+	if req.RunningOnly {
+		filtered := vms[:0]
+		for _, vm := range vms {
+			if vm.State == "running" {
+				filtered = append(filtered, vm)
+			}
+		}
+		vms = filtered
+	}
 	if req.JSON {
 		data, _ := json.MarshalIndent(vms, "", "  ")
 		fmt.Fprintln(stdout, string(data))
 		return nil
 	}
-	for _, vm := range vms {
-		fmt.Fprintf(stdout, "%-16s %s\n", vm.Name, vm.State)
+	if len(vms) == 0 {
+		fmt.Fprintln(stdout, "(no VMs)")
+		return nil
 	}
-	return nil
+	w := tabwriter.NewWriter(stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATE\tCONFIG\tDISPLAY")
+	for _, vm := range vms {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", vm.Name, vm.State, orDash(vm.Config), orDash(vm.URL))
+	}
+	return w.Flush()
 }
 
 // FormatStatus renders a Status for humans.
 func FormatStatus(status Status) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "VM:      %s (%s)\n", status.Name, status.State)
-	fmt.Fprintf(&b, "config:  %s#%s\n", status.Flake, status.Host)
+	fmt.Fprintf(&b, "VM:        %s (%s)\n", status.Name, status.State)
+	fmt.Fprintf(&b, "config:    %s#%s\n", status.Flake, status.Host)
+	if len(status.Overrides) > 0 {
+		parts := make([]string, 0, len(status.Overrides))
+		for _, override := range status.Overrides {
+			parts = append(parts, override.Name+"="+override.Ref)
+		}
+		fmt.Fprintf(&b, "overrides: %s\n", strings.Join(parts, ", "))
+	}
+	if status.Mem > 0 || status.CPUs > 0 || status.Disk > 0 {
+		fmt.Fprintf(&b, "resources: %s RAM, %d vCPU, %s disk\n",
+			humanMiB(status.Mem), status.CPUs, humanMiB(status.Disk))
+	}
 	if status.SSHKey != "" {
-		fmt.Fprintf(&b, "ssh:     ssh -i %s -p %s root@127.0.0.1\n", status.SSHKey, status.SSHPort)
+		fmt.Fprintf(&b, "ssh:       ssh -i %s -p %s root@127.0.0.1\n", status.SSHKey, status.SSHPort)
 	}
 	if status.URL != "" {
-		fmt.Fprintf(&b, "display: %s", status.URL)
+		fmt.Fprintf(&b, "display:   %s\n", status.URL)
 	} else {
-		fmt.Fprint(&b, "display: (headless)")
+		fmt.Fprintln(&b, "display:   (headless)")
 	}
-	return b.String()
+	if status.DiskUsedBytes > 0 {
+		fmt.Fprintf(&b, "disk:      %s used (%s virtual)\n", humanBytes(status.DiskUsedBytes), humanMiB(status.Disk))
+	}
+	if status.RSSBytes > 0 {
+		fmt.Fprintf(&b, "memory:    %s RSS\n", humanBytes(status.RSSBytes))
+	}
+	if status.Created != "" {
+		fmt.Fprintf(&b, "created:   %s\n", status.Created)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func humanMiB(mib int) string {
+	if mib >= 1024 {
+		return fmt.Sprintf("%.1f GiB", float64(mib)/1024)
+	}
+	return fmt.Sprintf("%d MiB", mib)
+}
+
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<30:
+		return fmt.Sprintf("%.2f GiB", float64(n)/(1<<30))
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
+}
+
+func orDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 // writerSink prints engine events to the CLI's streams.

@@ -75,12 +75,14 @@ nix run . -- up --flake ~/dev/mm/config --host dmnt
 | `apply` | Rebuild the config and live-switch the running guest. |
 | `reset` | Destroy the guest disk and boot fresh. Use before trusting a change. |
 | `down` | Stop the VM and its display. |
-| `status` | Show state, ports, and URLs (`--json` for machines). |
+| `rm` | Stop (if needed) and delete a VM's state. |
+| `prune` | Delete every stopped VM's state. |
+| `status` | One VM's state, config, overrides, resources, ports, disk/RSS and URLs (`--json`). |
 | `url` | Print the browser (noVNC) URL. |
 | `screenshot [FILE]` | Capture the guest framebuffer to a PNG (QMP `screendump`). |
 | `ssh [-- CMD]` | Shell into the guest, or run one command. |
 | `logs` | Follow the guest console. |
-| `list` | List known VMs. |
+| `list` | List VMs with config and display (`--json`, `--running`). |
 | `doctor` | Check host prerequisites. |
 
 Options: `--name`, `--flake`, `--host`, `--mem`, `--cpus`, `--disk`,

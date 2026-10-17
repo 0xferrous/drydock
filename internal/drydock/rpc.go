@@ -41,7 +41,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"name":    "drydock-portal",
 			"version": Version,
-			"methods": []string{"up", "apply", "reset", "down", "status", "url", "screenshot", "ssh", "logs", "list", "doctor"},
+			"methods": []string{"up", "apply", "reset", "down", "rm", "prune", "status", "url", "screenshot", "ssh", "logs", "list", "doctor"},
 		})
 	})
 
@@ -49,6 +49,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/rpc/apply", s.stream(s.Driver.Apply))
 	mux.HandleFunc("/rpc/reset", s.stream(s.Driver.Reset))
 	mux.HandleFunc("/rpc/down", s.stream(s.Driver.Down))
+	mux.HandleFunc("/rpc/rm", s.stream(s.Driver.Remove))
+	mux.HandleFunc("/rpc/prune", s.stream(s.Driver.Prune))
 	mux.HandleFunc("/rpc/logs", s.stream(s.Driver.Logs))
 	mux.HandleFunc("/rpc/doctor", s.stream(func(ctx context.Context, req Request, sink Sink) error {
 		return s.Driver.Doctor(ctx, sink)
@@ -325,6 +327,12 @@ func (c *Remote) Reset(ctx context.Context, req Request, sink Sink) error {
 }
 func (c *Remote) Down(ctx context.Context, req Request, sink Sink) error {
 	return c.stream(ctx, "down", req, sink)
+}
+func (c *Remote) Remove(ctx context.Context, req Request, sink Sink) error {
+	return c.stream(ctx, "rm", req, sink)
+}
+func (c *Remote) Prune(ctx context.Context, req Request, sink Sink) error {
+	return c.stream(ctx, "prune", req, sink)
 }
 func (c *Remote) SSH(ctx context.Context, req Request, sink Sink) error {
 	return c.stream(ctx, "ssh", req, sink)

@@ -37,6 +37,7 @@ type Request struct {
 	DryRun         bool            `json:"dry_run,omitempty"`
 	ClearOverrides bool            `json:"clear_overrides,omitempty"`
 	JSON           bool            `json:"json,omitempty"`
+	RunningOnly    bool            `json:"running_only,omitempty"`
 	Args           []string        `json:"args,omitempty"`
 	Overrides      []InputOverride `json:"overrides,omitempty"`
 	NixArgs        []string        `json:"nix_args,omitempty"`
@@ -44,22 +45,34 @@ type Request struct {
 
 // Status describes a VM instance.
 type Status struct {
-	Name    string `json:"name"`
-	State   string `json:"state"`
-	Flake   string `json:"flake"`
-	Host    string `json:"host"`
-	Dir     string `json:"dir"`
-	VNCPort string `json:"vnc_port"`
-	WebPort string `json:"web_port"`
-	SSHPort string `json:"ssh_port"`
-	SSHKey  string `json:"ssh_key,omitempty"`
-	URL     string `json:"url"`
+	Name          string          `json:"name"`
+	State         string          `json:"state"`
+	Flake         string          `json:"flake"`
+	Host          string          `json:"host"`
+	Dir           string          `json:"dir"`
+	VNCPort       string          `json:"vnc_port"`
+	WebPort       string          `json:"web_port"`
+	SSHPort       string          `json:"ssh_port"`
+	SSHKey        string          `json:"ssh_key,omitempty"`
+	URL           string          `json:"url"`
+	Created       string          `json:"created,omitempty"`
+	Mem           int             `json:"mem_mib,omitempty"`
+	CPUs          int             `json:"cpus,omitempty"`
+	Disk          int             `json:"disk_mib,omitempty"`
+	Overrides     []InputOverride `json:"overrides,omitempty"`
+	NixArgs       []string        `json:"nix_args,omitempty"`
+	DiskBytes     int64           `json:"disk_bytes,omitempty"`
+	DiskUsedBytes int64           `json:"disk_used_bytes,omitempty"`
+	RSSBytes      int64           `json:"rss_bytes,omitempty"`
 }
 
 // VMInfo is the compact form used by List.
 type VMInfo struct {
-	Name  string `json:"name"`
-	State string `json:"state"`
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Config  string `json:"config,omitempty"`
+	Created string `json:"created,omitempty"`
+	URL     string `json:"url,omitempty"`
 }
 
 // Event is one streamed message. Streaming operations emit stdout/stderr lines
@@ -89,6 +102,8 @@ type Driver interface {
 	SSH(context.Context, Request, Sink) error
 	Logs(context.Context, Request, Sink) error
 	List(context.Context) ([]VMInfo, error)
+	Remove(context.Context, Request, Sink) error
+	Prune(context.Context, Request, Sink) error
 	Doctor(context.Context, Sink) error
 }
 
@@ -103,6 +118,9 @@ type meta struct {
 	DisplayAddr string          `json:"display_addr"`
 	Headless    bool            `json:"headless"`
 	Created     string          `json:"created"`
+	Mem         int             `json:"mem,omitempty"`
+	CPUs        int             `json:"cpus,omitempty"`
+	Disk        int             `json:"disk,omitempty"`
 	Overrides   []InputOverride `json:"overrides,omitempty"`
 	NixArgs     []string        `json:"nix_args,omitempty"`
 }

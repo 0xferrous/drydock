@@ -354,6 +354,9 @@ func (e *Engine) Up(ctx context.Context, req Request, sink Sink) error {
 		VNCPort: vnc, WebPort: web, SSHPort: sshPort,
 		DisplayAddr: r.req.DisplayAddr, Headless: req.Headless,
 		Created:   time.Now().Format(time.RFC3339),
+		Mem:       atoiOr0(r.req.Mem),
+		CPUs:      atoiOr0(r.req.CPUs),
+		Disk:      atoiOr0(r.req.Disk),
 		Overrides: r.req.Overrides, NixArgs: r.req.NixArgs,
 	}
 	if err := e.saveMeta(m); err != nil {
@@ -575,13 +578,68 @@ func (e *Engine) List(ctx context.Context) ([]VMInfo, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		state := "stopped"
-		if _, running := e.pid(entry.Name()); running {
-			state = "running"
+		name := entry.Name()
+		info := VMInfo{Name: name, State: "stopped"}
+		if _, running := e.pid(name); running {
+			info.State = "running"
 		}
-		out = append(out, VMInfo{Name: entry.Name(), State: state})
+		if m, err := e.loadMeta(name); err == nil {
+			info.Config = m.Flake + "#" + m.Host
+			info.Created = m.Created
+			if !m.Headless {
+				info.URL = fmt.Sprintf("http://%s:%d/vnc.html?autoconnect=1&resize=scale", m.DisplayAddr, m.WebPort)
+			}
+		}
+		out = append(out, info)
 	}
 	return out, nil
+}
+
+// Remove stops (if needed) and deletes a VM's state.
+func (e *Engine) Remove(ctx context.Context, req Request, sink Sink) error {
+	name := req.Name
+	if name == "" {
+		name = envOr("DRYDOCK_NAME", "default")
+	}
+	if !nameRE.MatchString(name) {
+		return fmt.Errorf("invalid VM name %q", name)
+	}
+	dir := e.vmDir(name)
+	if _, err := os.Stat(dir); err != nil {
+		return fmt.Errorf("no VM named %q", name)
+	}
+	if _, running := e.pid(name); running {
+		req.Name = name
+		_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("stopping VM '%s' before removing", name)})
+		if err := e.Down(ctx, req, sink); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("removed VM '%s'", name)})
+}
+
+// Prune removes every stopped VM's state and leaves running ones alone.
+func (e *Engine) Prune(ctx context.Context, req Request, sink Sink) error {
+	infos, err := e.List(ctx)
+	if err != nil {
+		return err
+	}
+	removed := 0
+	for _, info := range infos {
+		if info.State == "running" {
+			_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("skipping running VM '%s'", info.Name)})
+			continue
+		}
+		if err := os.RemoveAll(e.vmDir(info.Name)); err != nil {
+			return err
+		}
+		removed++
+		_ = sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("removed VM '%s'", info.Name)})
+	}
+	return sink.Emit(Event{Type: "stdout", Data: fmt.Sprintf("pruned %d VM(s)", removed)})
 }
 
 // Doctor checks host prerequisites.
@@ -621,18 +679,21 @@ func (e *Engine) statusFor(r resolved) (Status, error) {
 	if err != nil {
 		return Status{}, fmt.Errorf("no VM named %q", r.req.Name)
 	}
-	state := "stopped"
-	if _, running := e.pid(m.Name); running {
-		state = "running"
-	}
 	st := Status{
-		Name: m.Name, State: state, Flake: m.Flake, Host: m.Host,
+		Name: m.Name, State: "stopped", Flake: m.Flake, Host: m.Host,
 		Dir: e.vmDir(m.Name), VNCPort: strconv.Itoa(m.VNCPort),
 		WebPort: strconv.Itoa(m.WebPort), SSHPort: strconv.Itoa(m.SSHPort),
-		SSHKey: e.keyPath(m.Name),
+		SSHKey: e.keyPath(m.Name), Created: m.Created,
+		Mem: m.Mem, CPUs: m.CPUs, Disk: m.Disk,
+		Overrides: m.Overrides, NixArgs: m.NixArgs,
 	}
 	if !m.Headless {
 		st.URL = fmt.Sprintf("http://%s:%d/vnc.html?autoconnect=1&resize=scale", m.DisplayAddr, m.WebPort)
+	}
+	st.DiskBytes, st.DiskUsedBytes = diskUsage(filepath.Join(e.vmDir(m.Name), "disk.qcow2"))
+	if pid, running := e.pid(m.Name); running {
+		st.State = "running"
+		st.RSSBytes = rssBytes(pid)
 	}
 	return st, nil
 }
@@ -736,6 +797,42 @@ func runToFile(ctx context.Context, path string, env []string, name string, args
 	cmd.Stdout = file
 	cmd.Stderr = file
 	return cmd.Run()
+}
+
+func atoiOr0(value string) int {
+	n, _ := strconv.Atoi(value)
+	return n
+}
+
+// diskUsage returns the apparent size of a disk image and the blocks it
+// actually occupies on disk (qcow2 files are sparse).
+func diskUsage(path string) (apparent, used int64) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0
+	}
+	apparent = info.Size()
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		used = st.Blocks * 512
+	}
+	return apparent, used
+}
+
+// rssBytes reports a process's resident set size.
+func rssBytes(pid int) int64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return 0
+	}
+	pages, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return pages * int64(os.Getpagesize())
 }
 
 func tailLines(path string, n int) string {

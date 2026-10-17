@@ -34,7 +34,7 @@ e2e:
     echo "== up again while healthy"
     "$d" up --name "$name" | tee /tmp/dd-e2e-up
     grep -q "already running" /tmp/dd-e2e-up
-    grep -q "display: http" /tmp/dd-e2e-up
+    grep -q "display:.*http" /tmp/dd-e2e-up
 
     echo "== screenshot"
     "$d" screenshot --name "$name" /tmp/dd-e2e.png
