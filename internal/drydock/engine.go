@@ -572,6 +572,8 @@ func (e *Engine) emitStatus(sink Sink, r resolved) error {
 
 func (e *Engine) sshCommand(ctx context.Context, m *meta, key string, batch bool, args ...string) *exec.Cmd {
 	base := []string{"-q",
+		"-F", "/dev/null",
+		"-o", "IdentitiesOnly=yes",
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",

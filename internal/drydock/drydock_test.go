@@ -1,6 +1,7 @@
 package drydock
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,6 +152,20 @@ func TestResolvePrecedence(t *testing.T) {
 	}
 	if len(got.req.Overrides) != 1 || got.req.Overrides[0].Ref != "path:/explicit-marker" {
 		t.Errorf("explicit overrides did not win: %#v", got.req.Overrides)
+	}
+}
+
+func TestSSHCommandIgnoresUserConfig(t *testing.T) {
+	engine := &Engine{}
+	cmd := engine.sshCommand(context.Background(), &meta{SSHPort: 2222}, "/tmp/key", true, "true")
+	joined := strings.Join(cmd.Args, " ")
+	// The host user's ~/.ssh/config must never be able to disable drydock's
+	// public-key auth (e.g. a `Host *` block with PubkeyAuthentication no).
+	if !strings.Contains(joined, "-F /dev/null") {
+		t.Errorf("ssh command does not ignore user config: %s", joined)
+	}
+	if !strings.Contains(joined, "IdentitiesOnly=yes") {
+		t.Errorf("ssh command does not pin the identity: %s", joined)
 	}
 }
 
