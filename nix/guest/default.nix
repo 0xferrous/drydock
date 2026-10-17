@@ -55,17 +55,22 @@ in
 
     services.qemuGuest.enable = lib.mkForce true;
 
-    # Sensible, overridable VM resources and a consistent framebuffer. These
-    # options only exist inside the `vmVariant`, so they must be set there
-    # rather than on the base configuration (which never imports qemu-vm.nix).
-    virtualisation.vmVariant.virtualisation = {
-      resolution = lib.mkDefault {
-        x = 1600;
-        y = 900;
+    # drydock owns the VM variant. A user's own `virtualisation.vmVariant`
+    # settings (a GTK/GL display, extra host directory shares, and so on) are
+    # for `nix build ...system.build.vm` on their desktop and are wrong for a
+    # headless VNC preview. Forcing this also strips any extra host directory
+    # shares an untrusted config might add.
+    virtualisation.vmVariant = lib.mkForce {
+      virtualisation = {
+        graphics = true;
+        resolution = {
+          x = 1600;
+          y = 900;
+        };
+        memorySize = if cfg.mem == null then 4096 else cfg.mem;
+        cores = if cfg.cpus == null then 4 else cfg.cpus;
+        diskSize = if cfg.disk == null then 16384 else cfg.disk;
       };
-      memorySize = lib.mkDefault (if cfg.mem == null then 4096 else cfg.mem);
-      cores = lib.mkDefault (if cfg.cpus == null then 4 else cfg.cpus);
-      diskSize = lib.mkDefault (if cfg.disk == null then 16384 else cfg.disk);
     };
   };
 }
