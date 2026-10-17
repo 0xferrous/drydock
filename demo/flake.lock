@@ -1,0 +1,39 @@
+{
+  "nodes": {
+    "marker": {
+      "locked": {
+        "path": "./marker",
+        "type": "path"
+      },
+      "original": {
+        "path": "./marker",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1785550989,
+        "narHash": "sha256-wz1uHyrTrU2/oHPVmb+GzX1u4QsFsCWezS5D4y4ga00=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a430a19c1b8e4ca4e8ac512d94a7453f04955d45",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "a430a19c1b8e4ca4e8ac512d94a7453f04955d45",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "marker": "marker",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
